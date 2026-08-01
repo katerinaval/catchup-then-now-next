@@ -97,11 +97,25 @@
       border: 1.5px solid #e7c89a;
       font-weight: 700;
     }
+    .timer-box.running {
+      background: var(--sea-soft);
+      border-color: #8fbfb8;
+      animation: pulse 1.2s ease-in-out infinite;
+    }
+    .timer-box.done {
+      background: #f6d9d4;
+      border-color: #e0a198;
+    }
+    @keyframes pulse {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.02); }
+    }
     .timer-box strong {
       font-family: Fraunces, Georgia, serif;
       font-size: 1.35rem;
-      min-width: 3.2ch;
+      min-width: 4.2ch;
       text-align: center;
+      font-variant-numeric: tabular-nums;
     }
     .steps {
       display: grid;
@@ -544,6 +558,7 @@
     const clock = document.getElementById("clock");
     const timerStart = document.getElementById("timerStart");
     const timerReset = document.getElementById("timerReset");
+    const timerBox = document.querySelector(".timer-box");
     const boxes = [...document.querySelectorAll(".box")];
     const markDone = document.getElementById("markDone");
     const boxProgress = document.getElementById("boxProgress");
@@ -553,7 +568,8 @@
     let activeBox = 0;
     let doneBoxes = new Set();
     let timerId = null;
-    let remaining = 0;
+    let endsAt = 0;
+    let remainingMs = 0;
     let running = false;
 
     function showStep(n) {
@@ -569,46 +585,114 @@
       teacherToggle.classList.toggle("on", document.body.classList.contains("teacher-on"));
     });
 
-    function format(s) {
-      const m = Math.floor(s / 60);
-      const r = s % 60;
+    function formatMs(ms) {
+      const total = Math.max(0, Math.ceil(ms / 1000));
+      const m = Math.floor(total / 60);
+      const r = total % 60;
       return `${String(m).padStart(2, "0")}:${String(r).padStart(2, "0")}`;
     }
 
-    function renderClock() { clock.textContent = format(remaining); }
+    function renderClock() {
+      const ms = running ? Math.max(0, endsAt - Date.now()) : remainingMs;
+      clock.textContent = formatMs(ms);
+    }
 
-    function stopTimer() {
+    function beep() {
+      try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const o = ctx.createOscillator();
+        const g = ctx.createGain();
+        o.connect(g); g.connect(ctx.destination);
+        o.frequency.value = 880;
+        g.gain.value = 0.08;
+        o.start();
+        setTimeout(() => { o.stop(); ctx.close(); }, 220);
+      } catch (_) {}
+    }
+
+    function clearTick() {
+      if (timerId != null) {
+        clearInterval(timerId);
+        timerId = null;
+      }
+    }
+
+    function pauseTimer() {
+      if (!running) return;
+      remainingMs = Math.max(0, endsAt - Date.now());
       running = false;
-      clearInterval(timerId);
+      clearTick();
       timerStart.textContent = "Start";
+      timerBox.classList.remove("running", "done");
+      renderClock();
+    }
+
+    function finishTimer() {
+      running = false;
+      remainingMs = 0;
+      endsAt = 0;
+      clearTick();
+      timerStart.textContent = "Start";
+      timerBox.classList.remove("running");
+      timerBox.classList.add("done");
+      clock.textContent = "00:00";
+      beep();
+      setTimeout(() => timerBox.classList.remove("done"), 1600);
     }
 
     function startTimer() {
-      if (remaining <= 0) return;
-      if (running) { stopTimer(); return; }
+      if (running) {
+        pauseTimer();
+        return;
+      }
+      if (remainingMs <= 0) return;
       running = true;
+      endsAt = Date.now() + remainingMs;
       timerStart.textContent = "Pause";
+      timerBox.classList.add("running");
+      timerBox.classList.remove("done");
+      clearTick();
       timerId = setInterval(() => {
-        remaining -= 1;
-        renderClock();
-        if (remaining <= 0) {
-          stopTimer();
-          clock.textContent = "00:00";
-          try { new Audio("data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=").play(); } catch {}
+        const left = endsAt - Date.now();
+        if (left <= 0) {
+          finishTimer();
+          return;
         }
-      }, 1000);
+        remainingMs = left;
+        renderClock();
+      }, 100);
+      renderClock();
     }
 
-    timerStart.addEventListener("click", startTimer);
-    timerReset.addEventListener("click", () => { stopTimer(); remaining = 0; renderClock(); });
+    function armTimer(seconds) {
+      const sec = Number(seconds);
+      if (!Number.isFinite(sec) || sec <= 0) return;
+      pauseTimer();
+      remainingMs = sec * 1000;
+      timerBox.classList.remove("done");
+      renderClock();
+      startTimer();
+    }
 
-    document.querySelectorAll("[data-set-timer]").forEach(btn => {
-      btn.addEventListener("click", () => {
-        stopTimer();
-        remaining = Number(btn.dataset.setTimer);
-        renderClock();
-        startTimer();
-      });
+    timerStart.addEventListener("click", (e) => {
+      e.preventDefault();
+      startTimer();
+    });
+    timerReset.addEventListener("click", (e) => {
+      e.preventDefault();
+      pauseTimer();
+      remainingMs = 0;
+      endsAt = 0;
+      timerBox.classList.remove("running", "done");
+      renderClock();
+    });
+
+    // Event delegation — works even for buttons in hidden panels
+    document.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-set-timer]");
+      if (!btn) return;
+      e.preventDefault();
+      armTimer(btn.getAttribute("data-set-timer"));
     });
 
     function renderBoxes() {
